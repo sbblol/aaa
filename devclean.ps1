@@ -1,5 +1,6 @@
 # GraphDeviceCleanup.ps1
 # Description: Azure Automation Runbook script to identify and disable/delete stale Azure AD devices using Microsoft Graph and Managed Identity.
+# Note: This script is compliant with PowerShell 5.1, uses Az.Accounts for Managed Identity authentication, and avoids AzureRM module conflicts.
 
 param(
     [int]$DisableThresholdDays = 150,
@@ -9,11 +10,7 @@ param(
     [bool]$TestMode = $true
 )
 
-
-
 # Validate required modules
-# Ensure Az.Accounts module is available
-# Ensure Az.Accounts module is available for Managed Identity
 try {
     Import-Module Az.Accounts -ErrorAction Stop
     Write-Output "✅ Az.Accounts module is available and imported."
@@ -22,29 +19,7 @@ try {
     exit 1
 }
 
-
-try {
-    $requiredModules = @(
-        'Microsoft.Graph.Identity.DirectoryManagement',
-        'Microsoft.Graph.Authentication',
-        'Microsoft.Graph.Devices.CorporateManagement'
-    )
-
-    foreach ($module in $requiredModules) {
-        if (-not (Get-Module -ListAvailable -Name $module)) {
-            Write-Output "❌ ERROR: Required module '$module' is not installed. Please add it to the Automation Account."
-            exit 1
-        }
-        Import-Module $module -ErrorAction Stop
-    }
-
-    Write-Output "✅ Required Microsoft Graph modules are available and imported."
-} catch {
-    Write-Output "❌ ERROR: Failed to validate or import required Microsoft Graph modules. $_"
-    exit 1
-}
-
-# Step 1: Authenticate using Managed Identity
+# Authenticate using Managed Identity
 try {
     $AzureContext = (Connect-AzAccount -Identity).Context
     Write-Output "✅ Managed Identity authentication succeeded for tenant: $($AzureContext.Tenant.Id)"
@@ -53,39 +28,38 @@ try {
     exit 1
 }
 
-# Step 2: Connect-MgGraph with Managed Identity token
+# Acquire Microsoft Graph token
 try {
-    Connect-MgGraph -AccessToken (Get-AzAccessToken -ResourceUrl "https://graph.microsoft.com").Token | Out-Null
-    Write-Output "✅ Connected to Microsoft Graph via MgGraph module."
+    $AccessToken = (Get-AzAccessToken -ResourceUrl "https://graph.microsoft.com").Token
+    Write-Output "✅ Access token for Microsoft Graph acquired."
 } catch {
-    Write-Output "❌ ERROR: Failed to connect to Microsoft Graph with Managed Identity. $_"
+    Write-Output "❌ ERROR: Failed to acquire Microsoft Graph token. $_"
     exit 1
 }
 
-# Step 3: Get Devices using Get-MgDevice
+# Step 3: Get all Devices using Microsoft Graph REST API
 $DisableThresholdDate = (Get-Date).AddDays(-$DisableThresholdDays)
-
 try {
-    $Devices = Get-MgDevice -All | Where-Object {
-        $_.ApproximateLastSignInDateTime -and ([datetime]$_.ApproximateLastSignInDateTime -le $DisableThresholdDate)
-    }
+    $Headers = @{ Authorization = "Bearer $AccessToken" }
+    $uri = "https://graph.microsoft.com/v1.0/devices?`$top=999"
+    $response = Invoke-RestMethod -Uri $uri -Headers $Headers -Method GET -ErrorAction Stop
+    $Devices = $response.value
 
     if (-not $Devices) {
-        Write-Output "✅ No stale devices found."
+        Write-Output "✅ No devices found in tenant."
         exit 0
     }
 } catch {
-    Write-Output "❌ ERROR: Failed to retrieve devices using Get-MgDevice. $_"
+    Write-Output "❌ ERROR: Failed to retrieve devices using Microsoft Graph REST API. $_"
     exit 1
 }
 
-# Summary Report Before Actions
+# Filter results client-side
 $DeleteThresholdDate = (Get-Date).AddDays(-$DeleteThresholdDays)
-$TotalDevices = $Devices.Count
-$DevicesToDisable = $Devices | Where-Object { $_.AccountEnabled -eq $true }
-$DevicesToDelete = $Devices | Where-Object { $_.AccountEnabled -eq $false -and ([datetime]::Parse($_.ApproximateLastSignInDateTime) -lt $DeleteThresholdDate) }
+$DevicesToDisable = $Devices | Where-Object { $_.AccountEnabled -eq $true -and [datetime]::Parse($_.ApproximateLastSignInDateTime) -lt $DisableThresholdDate }
+$DevicesToDelete = $Devices | Where-Object { $_.AccountEnabled -eq $false -and [datetime]::Parse($_.ApproximateLastSignInDateTime) -lt $DeleteThresholdDate }
 
-Write-Output "📊 Total devices fetched: $TotalDevices"
+Write-Output "📊 Total devices fetched: $($Devices.Count)"
 Write-Output "📉 Devices eligible for disable: $($DevicesToDisable.Count)"
 Write-Output "🗑️ Devices eligible for delete: $($DevicesToDelete.Count)"
 
@@ -103,19 +77,21 @@ foreach ($Device in $Devices) {
             Write-Output "🧪 [TestMode] Would delete disabled device: $DeviceName"
         } else {
             try {
-                Remove-MgDevice -DeviceId $DeviceId -ErrorAction Stop
+                $uri = "https://graph.microsoft.com/v1.0/devices/$DeviceId"
+                Invoke-RestMethod -Uri $uri -Headers $Headers -Method DELETE -ErrorAction Stop
                 Write-Output "🗑️ Deleted disabled device: $DeviceName"
             } catch {
                 Write-Output "❌ Failed to delete $DeviceName. $_"
             }
         }
-    } elseif ($DisableOnly -and $Device.AccountEnabled) {
+    } elseif ($DisableOnly -and $Device.AccountEnabled -and $LastSeenDate -lt $DisableThresholdDate) {
         if ($TestMode) {
             Write-Output "🧪 [TestMode] Would disable device: $DeviceName"
         } else {
             $PatchBody = @{ accountEnabled = $false } | ConvertTo-Json -Depth 3
             try {
-                Update-MgDevice -DeviceId $DeviceId -BodyParameter $PatchBody -ErrorAction Stop
+                $uri = "https://graph.microsoft.com/v1.0/devices/$DeviceId"
+                Invoke-RestMethod -Uri $uri -Headers $Headers -Method PATCH -Body $PatchBody -ContentType "application/json" -ErrorAction Stop
                 Write-Output "🚫 Disabled device: $DeviceName"
             } catch {
                 Write-Output "❌ Failed to disable $DeviceName. $_"
