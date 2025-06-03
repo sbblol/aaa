@@ -28,10 +28,21 @@ try {
     exit 1
 }
 
+# Retrieve TenantId from Automation Account variables
+try {
+    [string]$TenantId = Get-AutomationVariable -Name "TenantId"
+    [string]$Resource = "https://graph.microsoft.com"
+    Write-Output "✅ TenantId retrieved from Automation Account variables."
+} catch {
+    Write-Output "❌ ERROR: Failed to retrieve TenantId from Automation Account variables. Ensure 'TenantId' is set."
+    exit 1
+}
+
 # Acquire Microsoft Graph token
 try {
-    $AccessToken = (Get-AzAccessToken -ResourceUrl "https://graph.microsoft.com").Token
-    Write-Output "✅ Access token for Microsoft Graph acquired."
+    $AccessTokenResponse = Get-AzAccessToken -ResourceUrl $Resource -TenantId $TenantId -ErrorAction Stop
+    $AccessToken = $AccessTokenResponse.Token
+    Write-Output "✅ Access token for Microsoft Graph acquired using TenantId."
 } catch {
     Write-Output "❌ ERROR: Failed to acquire Microsoft Graph token. $($_.ToString())"
     exit 1
