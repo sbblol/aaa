@@ -12,20 +12,13 @@ param(
 
 
 # Validate required modules
-# Ensure Az.Accounts module is present and AzureRM is not
+# Ensure Az.Accounts module is available
+# Ensure Az.Accounts module is available for Managed Identity
 try {
-    if (-not (Get-Module -ListAvailable -Name Az.Accounts)) {
-        Write-Output "❌ ERROR: Required module 'Az.Accounts' is not installed."
-        exit 1
-    }
-    if (Get-Module -ListAvailable -Name AzureRM*) {
-        Write-Output "❌ ERROR: AzureRM modules detected. These conflict with Az modules. Please remove AzureRM modules from your Automation Account."
-        exit 1
-    }
     Import-Module Az.Accounts -ErrorAction Stop
     Write-Output "✅ Az.Accounts module is available and imported."
 } catch {
-    Write-Output "❌ ERROR: Failed to validate or import Az.Accounts module. $_"
+    Write-Output "❌ ERROR: Az.Accounts module is missing or failed to load. $_"
     exit 1
 }
 
