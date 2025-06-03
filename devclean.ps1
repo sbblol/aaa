@@ -12,7 +12,7 @@ param(
     [switch]$DeleteDisabledDevicesOnly,
 
     [Parameter(Mandatory = $true)]
-    [switch]$TestMode = $false
+[bool]$TestMode = $true
 )
 
 # Step 1: Authenticate using Managed Identity
