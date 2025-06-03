@@ -2,18 +2,28 @@
 # Description: Azure Automation Runbook script to identify and disable/delete stale Azure AD devices using Microsoft Graph and Managed Identity.
 
 param(
-    [Parameter(Mandatory = $true)]
     [int]$DisableThresholdDays = 150,
 
-    [Parameter(Mandatory = $true)]
     [int]$DeleteThresholdDays = 180,
 
     [switch]$DisableOnly,
     [switch]$DeleteDisabledDevicesOnly,
 
-    [Parameter(Mandatory = $true)]
-[bool]$TestMode = $true
+    [bool]$TestMode = $true
 )
+
+# Validate required modules
+try {
+    if (-not (Get-Module -ListAvailable -Name Microsoft.Graph)) {
+        Write-Output "❌ ERROR: Microsoft.Graph module is not installed. Please import or install it in the Automation Account."
+        exit 1
+    }
+    Import-Module Microsoft.Graph -ErrorAction Stop
+    Write-Output "✅ Microsoft.Graph module is available and imported."
+} catch {
+    Write-Output "❌ ERROR: Failed to validate or import Microsoft.Graph module. $_"
+    exit 1
+}
 
 # Step 1: Authenticate using Managed Identity
 try {
@@ -33,28 +43,28 @@ try {
     exit 1
 }
 
-# Step 3: Get Devices older than disable threshold using Invoke-MgGraphRequest
-$DisableThresholdDate = (Get-Date).AddDays(-$DisableThresholdDays).ToString("yyyy-MM-ddTHH:mm:ssZ")
-$DeviceQuery = "/devices?`$filter=approximateLastSignInDateTime le $DisableThresholdDate&`$top=100"
+# Step 3: Get Devices using Get-MgDevice
+$DisableThresholdDate = (Get-Date).AddDays(-$DisableThresholdDays)
 
 try {
-    $DeviceResponse = Invoke-MgGraphRequest -Method GET -Uri $DeviceQuery
-    $Devices = $DeviceResponse.value
+    $Devices = Get-MgDevice -All | Where-Object {
+        $_.ApproximateLastSignInDateTime -and ([datetime]$_.ApproximateLastSignInDateTime -le $DisableThresholdDate)
+    }
 
     if (-not $Devices) {
         Write-Output "✅ No stale devices found."
         exit 0
     }
 } catch {
-    Write-Output "❌ ERROR: Failed to retrieve devices using Microsoft Graph. $_"
+    Write-Output "❌ ERROR: Failed to retrieve devices using Get-MgDevice. $_"
     exit 1
 }
 
 # Summary Report Before Actions
 $DeleteThresholdDate = (Get-Date).AddDays(-$DeleteThresholdDays)
 $TotalDevices = $Devices.Count
-$DevicesToDisable = $Devices | Where-Object { $_.accountEnabled -eq $true }
-$DevicesToDelete = $Devices | Where-Object { $_.accountEnabled -eq $false -and ([datetime]::Parse($_.approximateLastSignInDateTime) -lt $DeleteThresholdDate) }
+$DevicesToDisable = $Devices | Where-Object { $_.AccountEnabled -eq $true }
+$DevicesToDelete = $Devices | Where-Object { $_.AccountEnabled -eq $false -and ([datetime]::Parse($_.ApproximateLastSignInDateTime) -lt $DeleteThresholdDate) }
 
 Write-Output "📊 Total devices fetched: $TotalDevices"
 Write-Output "📉 Devices eligible for disable: $($DevicesToDisable.Count)"
@@ -62,31 +72,31 @@ Write-Output "🗑️ Devices eligible for delete: $($DevicesToDelete.Count)"
 
 # Step 4: Loop through and apply action
 foreach ($Device in $Devices) {
-    $DeviceId = $Device.id
-    $DeviceName = $Device.displayName
-    $LastSeen = $Device.approximateLastSignInDateTime
+    $DeviceId = $Device.Id
+    $DeviceName = $Device.DisplayName
+    $LastSeen = $Device.ApproximateLastSignInDateTime
     $LastSeenDate = [datetime]::Parse($LastSeen)
 
     Write-Output "➡️ Processing device: $DeviceName ($DeviceId), LastSignIn: $LastSeen"
 
-    if ($DeleteDisabledDevicesOnly -and -not $Device.accountEnabled -and $LastSeenDate -lt $DeleteThresholdDate) {
+    if ($DeleteDisabledDevicesOnly -and -not $Device.AccountEnabled -and $LastSeenDate -lt $DeleteThresholdDate) {
         if ($TestMode) {
             Write-Output "🧪 [TestMode] Would delete disabled device: $DeviceName"
         } else {
             try {
-                Invoke-MgGraphRequest -Method DELETE -Uri "/devices/$DeviceId"
+                Remove-MgDevice -DeviceId $DeviceId -ErrorAction Stop
                 Write-Output "🗑️ Deleted disabled device: $DeviceName"
             } catch {
                 Write-Output "❌ Failed to delete $DeviceName. $_"
             }
         }
-    } elseif ($DisableOnly -and $Device.accountEnabled) {
+    } elseif ($DisableOnly -and $Device.AccountEnabled) {
         if ($TestMode) {
             Write-Output "🧪 [TestMode] Would disable device: $DeviceName"
         } else {
             $PatchBody = @{ accountEnabled = $false } | ConvertTo-Json -Depth 3
             try {
-                Invoke-MgGraphRequest -Method PATCH -Uri "/devices/$DeviceId" -Body $PatchBody
+                Update-MgDevice -DeviceId $DeviceId -BodyParameter $PatchBody -ErrorAction Stop
                 Write-Output "🚫 Disabled device: $DeviceName"
             } catch {
                 Write-Output "❌ Failed to disable $DeviceName. $_"
@@ -96,5 +106,7 @@ foreach ($Device in $Devices) {
         Write-Output "ℹ️ Skipped device: $DeviceName (conditions not met)."
     }
 }
+
+ # End foreach
 
 Write-Output "✅ Device cleanup run completed."
