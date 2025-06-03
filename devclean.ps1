@@ -3,25 +3,33 @@
 
 param(
     [int]$DisableThresholdDays = 150,
-
     [int]$DeleteThresholdDays = 180,
-
     [switch]$DisableOnly,
     [switch]$DeleteDisabledDevicesOnly,
-
     [bool]$TestMode = $true
 )
 
+
+
 # Validate required modules
 try {
-    if (-not (Get-Module -ListAvailable -Name Microsoft.Graph)) {
-        Write-Output "❌ ERROR: Microsoft.Graph module is not installed. Please import or install it in the Automation Account."
-        exit 1
+    $requiredModules = @(
+        'Microsoft.Graph.Identity.DirectoryManagement',
+        'Microsoft.Graph.Authentication',
+        'Microsoft.Graph.Devices.CorporateManagement'
+    )
+
+    foreach ($module in $requiredModules) {
+        if (-not (Get-Module -ListAvailable -Name $module)) {
+            Write-Output "❌ ERROR: Required module '$module' is not installed. Please add it to the Automation Account."
+            exit 1
+        }
+        Import-Module $module -ErrorAction Stop
     }
-    Import-Module Microsoft.Graph -ErrorAction Stop
-    Write-Output "✅ Microsoft.Graph module is available and imported."
+
+    Write-Output "✅ Required Microsoft Graph modules are available and imported."
 } catch {
-    Write-Output "❌ ERROR: Failed to validate or import Microsoft.Graph module. $_"
+    Write-Output "❌ ERROR: Failed to validate or import required Microsoft Graph modules. $_"
     exit 1
 }
 
@@ -106,7 +114,5 @@ foreach ($Device in $Devices) {
         Write-Output "ℹ️ Skipped device: $DeviceName (conditions not met)."
     }
 }
-
- # End foreach
 
 Write-Output "✅ Device cleanup run completed."
