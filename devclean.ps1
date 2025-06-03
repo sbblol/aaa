@@ -2,11 +2,17 @@
 # Description: Azure Automation Runbook script to identify and disable/delete stale Azure AD devices using Microsoft Graph and Managed Identity.
 
 param(
+    [Parameter(Mandatory = $true)]
     [int]$DisableThresholdDays = 150,
+
+    [Parameter(Mandatory = $true)]
     [int]$DeleteThresholdDays = 180,
+
     [switch]$DisableOnly,
     [switch]$DeleteDisabledDevicesOnly,
-    [switch]$TestMode
+
+    [Parameter(Mandatory = $true)]
+    [switch]$TestMode = $false
 )
 
 # Step 1: Authenticate using Managed Identity
