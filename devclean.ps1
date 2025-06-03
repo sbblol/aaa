@@ -15,7 +15,7 @@ try {
     Import-Module Az.Accounts -ErrorAction Stop
     Write-Output "✅ Az.Accounts module is available and imported."
 } catch {
-    Write-Output "❌ ERROR: Az.Accounts module is missing or failed to load. $_"
+    Write-Output "❌ ERROR: Az.Accounts module is missing or failed to load. $($_.ToString())"
     exit 1
 }
 
@@ -33,15 +33,18 @@ try {
     $AccessToken = (Get-AzAccessToken -ResourceUrl "https://graph.microsoft.com").Token
     Write-Output "✅ Access token for Microsoft Graph acquired."
 } catch {
-    Write-Output "❌ ERROR: Failed to acquire Microsoft Graph token. $_"
+    Write-Output "❌ ERROR: Failed to acquire Microsoft Graph token. $($_.ToString())"
     exit 1
 }
 
 # Step 3: Get all Devices using Microsoft Graph REST API
 $DisableThresholdDate = (Get-Date).AddDays(-$DisableThresholdDays)
 try {
-    $Headers = @{ Authorization = "Bearer $AccessToken" }
-    $uri = "https://graph.microsoft.com/v1.0/devices?`$top=999"
+    $Headers = @{
+        Authorization  = "Bearer $AccessToken"
+        "Content-Type" = "application/json"
+    }
+    $uri = 'https://graph.microsoft.com/v1.0/devices?$top=999'
     $response = Invoke-RestMethod -Uri $uri -Headers $Headers -Method GET -ErrorAction Stop
     $Devices = $response.value
 
@@ -50,7 +53,8 @@ try {
         exit 0
     }
 } catch {
-    Write-Output "❌ ERROR: Failed to retrieve devices using Microsoft Graph REST API. $_"
+    Write-Output "❌ ERROR: Failed to retrieve devices using Microsoft Graph REST API."
+    Write-Output "Details: $($_.ToString())"
     exit 1
 }
 
@@ -81,7 +85,7 @@ foreach ($Device in $Devices) {
                 Invoke-RestMethod -Uri $uri -Headers $Headers -Method DELETE -ErrorAction Stop
                 Write-Output "🗑️ Deleted disabled device: $DeviceName"
             } catch {
-                Write-Output "❌ Failed to delete $DeviceName. $_"
+                Write-Output "❌ Failed to delete $DeviceName. $($_.ToString())"
             }
         }
     } elseif ($DisableOnly -and $Device.AccountEnabled -and $LastSeenDate -lt $DisableThresholdDate) {
@@ -94,7 +98,7 @@ foreach ($Device in $Devices) {
                 Invoke-RestMethod -Uri $uri -Headers $Headers -Method PATCH -Body $PatchBody -ContentType "application/json" -ErrorAction Stop
                 Write-Output "🚫 Disabled device: $DeviceName"
             } catch {
-                Write-Output "❌ Failed to disable $DeviceName. $_"
+                Write-Output "❌ Failed to disable $DeviceName. $($_.ToString())"
             }
         }
     } else {
